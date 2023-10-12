@@ -2,6 +2,7 @@
 #this is still a work in progress. I am modifying the script to look for more xss vulnerabilities
 #at the moment it's been modified to enter a unique 8 character string into each field on a site and then return the lines of html where the string shows up
 #later updates will analyze where the string is to determine what methods of attack the site may be vulnerable to and try them
+
 import requests
 from pprint import pprint
 from bs4 import BeautifulSoup as bs
@@ -94,7 +95,9 @@ def scan_xss(url):
         content = submit_form(form_details, url, js_script).content.decode()
         
         for val in ran_arr:
-            print(soup.find_all(string=val))
+            ran_list = soup.find_all(string=val)
+            for ran in ran_arr:
+            	print(ran.get_text())
         
     return is_vulnerable
 
@@ -103,5 +106,3 @@ if __name__ == "__main__":
     import sys
     url = sys.argv[1]
     print(scan_xss(url))
-
-        
