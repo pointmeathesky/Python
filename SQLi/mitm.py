@@ -5,6 +5,7 @@ url = ""
 payload = ""
 signaled = False
 
+# setting up the socket for the 2 programs to communicate
 context = zmq.Context()
 socket = context.socket(zmq.PAIR)
 socket.bind("tcp://127.0.0.1:5555")
@@ -12,6 +13,7 @@ modified_packets = set()
 
 
 def start(flow):
+    # getting the url that's passed in when the progrram is called 
     global url
     url = flow.server.config.get("url")
 
@@ -22,12 +24,13 @@ def request(flow: http.HTTPFlow) -> None:
     # check that the other script has signalled to begin altering packets
     if signaled and url in flow.request.pretty_host:
         for key, value in query.items(multi=True):
-            # replace the packet value with a SQL payload
+            # replace the packet value with an SQL payload
             query[key] = payload
-        # store the id of modified packet so that it's status code can be sent
+        # store the id of the modified packet so that it's status code can be sent
         modified_packets.add(flow.id)
 
 
+# the only thing needed from response is to get the status code of the packet
 def response(flow: http.HTTPFlow) -> None:
     global url, signaled
     query = flow.request.query
@@ -38,6 +41,7 @@ def response(flow: http.HTTPFlow) -> None:
         socket.send_string(status_code)
 
 
+#continously monitor the socket for the signal to start or stop modifying packets and the payload to use
 def receive_payload_from_socket():
     global payload, signaled
     while True:
